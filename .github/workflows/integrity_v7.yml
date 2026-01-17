@@ -51,6 +51,13 @@ jobs:
           echo "✅ Canonical files fetched successfully."
           head -n 2 schemas/FalconForge_Integrity_Manifest_v3_5.json || true
 
+      - name: Validate JSON format
+        run: |
+          set -euo pipefail
+          jq empty schemas/FalconForge_Integrity_Manifest_v3_5.json
+          jq empty schemas/ATHENA_CAP_SCHEMA_v3_5.json
+          echo "✅ Both manifest and schema are valid JSON."
+
       - name: Verify schema integrity
         run: |
           set -euo pipefail
