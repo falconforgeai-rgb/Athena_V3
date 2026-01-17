@@ -4,3 +4,5 @@ requests
 jq
 fastapi
 uvicorn
+aiohttp
+prometheus-fastapi-instrumentator
