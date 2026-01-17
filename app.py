@@ -1,12 +1,12 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from jsonschema import validate, ValidationError
-from typing import Any
-import datetime, os, json, uuid, logging, requests
+from typing import Any, Optional
+import datetime, os, json, uuid, logging, requests, hmac, hashlib
 
 # ----------------------------------------------------
-# Athena CAP Bridge v2 – Autonomous Relay
+# Athena CAP Bridge v2 – Secure Autonomous Relay
 # ----------------------------------------------------
 
 logging.basicConfig(
@@ -14,11 +14,11 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-app = FastAPI(title="Athena CAP Bridge v2", version="2.3")
+app = FastAPI(title="Athena CAP Bridge v2", version="2.4")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # restrict later if needed
+    allow_origins=["*"],  # tighten later if needed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,7 +38,7 @@ class CAPPayload(BaseModel):
     integrity: Any
 
 # ----------------------------------------------------
-# Helper: Load Schema
+# Load CAP schema
 # ----------------------------------------------------
 def load_cap_schema():
     schema_path = os.path.join(os.getcwd(), "schemas", "ATHENA_CAP_SCHEMA_v3_5.json")
@@ -54,7 +54,7 @@ def load_cap_schema():
 CAP_SCHEMA = load_cap_schema()
 
 # ----------------------------------------------------
-# Health Routes
+# Health routes
 # ----------------------------------------------------
 @app.get("/")
 def root():
@@ -69,10 +69,19 @@ def healthz():
     }
 
 # ----------------------------------------------------
-# Relay Helper
+# HMAC verification helper
+# ----------------------------------------------------
+def verify_signature(secret: str, body: bytes, received_sig: Optional[str]) -> bool:
+    """Verify that HMAC signature header matches body hash."""
+    if not secret or not received_sig:
+        return False
+    computed = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, received_sig)
+
+# ----------------------------------------------------
+# Relay helper
 # ----------------------------------------------------
 def relay_cap_payload(data: dict, trace_id: str):
-    """Send validated CAP payload to configured bridge relay."""
     bridge_url = os.getenv("BRIDGE_URL", "")
     token = os.getenv("RENDER_API_TOKEN", "")
 
@@ -97,27 +106,29 @@ def relay_cap_payload(data: dict, trace_id: str):
         return {"relay": "error", "message": str(e)}
 
 # ----------------------------------------------------
-# CAP Intake + Validation + Relay
+# CAP intake, validation, signature verification & relay
 # ----------------------------------------------------
 @app.post("/cap")
-async def receive_cap(request: Request):
+async def receive_cap(request: Request, x_athena_signature: Optional[str] = Header(None)):
     trace_id = str(uuid.uuid4())
+    secret = os.getenv("ATHENA_SHARED_SECRET", "")
+
+    body_bytes = await request.body()
+
+    # 1️⃣ Verify signature
+    if not verify_signature(secret, body_bytes, x_athena_signature):
+        logging.warning(f"[TRACE {trace_id}] Signature verification failed.")
+        raise HTTPException(status_code=401, detail="Invalid or missing signature header.")
 
     try:
-        data = await request.json()
+        data = json.loads(body_bytes.decode("utf-8"))
         logging.info(f"[TRACE {trace_id}] CAP received: {data.get('cap_id', 'unknown')}")
 
-        # Step 1: Field-level validation
+        # 2️⃣ Validate payload
         payload = CAPPayload(**data)
+        validate(instance=data, schema=CAP_SCHEMA)
 
-        # Step 2: Schema validation
-        try:
-            validate(instance=data, schema=CAP_SCHEMA)
-        except ValidationError as ve:
-            logging.warning(f"[TRACE {trace_id}] Schema validation failed: {ve.message}")
-            raise HTTPException(status_code=422, detail=f"CAP schema validation error: {ve.message}")
-
-        # Step 3: Relay the payload
+        # 3️⃣ Relay if configured
         relay_result = relay_cap_payload(data, trace_id)
 
         return {
@@ -127,14 +138,14 @@ async def receive_cap(request: Request):
             "relay_result": relay_result
         }
 
-    except HTTPException:
-        raise
+    except ValidationError as ve:
+        raise HTTPException(status_code=422, detail=f"CAP schema validation error: {ve.message}")
     except Exception as e:
         logging.error(f"[TRACE {trace_id}] CAP processing error: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid CAP payload: {str(e)}")
 
 # ----------------------------------------------------
-# Error Handler
+# Error handler
 # ----------------------------------------------------
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
