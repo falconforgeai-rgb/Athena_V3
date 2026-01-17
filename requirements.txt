@@ -1,0 +1,4 @@
+jsonschema
+colorama
+requests
+jq
