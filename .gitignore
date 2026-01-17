@@ -209,3 +209,6 @@ __marimo__/
 # Never commit bridge credentials
 config/bridge_config.json
 
+# Bridge configuration (never commit secrets)
+config/bridge_config.json
+
