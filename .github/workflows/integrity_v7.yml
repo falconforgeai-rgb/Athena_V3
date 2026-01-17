@@ -1,0 +1,55 @@
+name: Verify Athena Integrity (v7)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual audit trigger reason'
+        required: false
+        default: 'Manual audit dispatch'
+  push:
+    branches: [ main ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y jq curl
+          python3 -m pip install --upgrade pip
+          pip install jsonschema colorama requests
+
+      - name: Create log directory
+        run: mkdir -p archive/CAP_LOGS
+
+      - name: Verify schema integrity
+        run: |
+          set -euo pipefail
+          EXPECTED_HASH=$(jq -r '.modules[] | select(.name=="ATHENA_CAP_SCHEMA_v3_5.json") | .sha256' schemas/FalconForge_Integrity_Manifest_v3_5.json | sed 's/SHA256://')
+          ACTUAL_HASH=$(sha256sum schemas/ATHENA_CAP_SCHEMA_v3_5.json | awk '{print $1}')
+          LOGFILE="archive/CAP_LOGS/integrity_$(date +'%Y%m%d_%H%M%S').log"
+          echo "Expected: $EXPECTED_HASH" | tee -a "$LOGFILE"
+          echo "Actual:   $ACTUAL_HASH" | tee -a "$LOGFILE"
+          if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+            echo "❌ Integrity mismatch detected!" | tee -a "$LOGFILE"
+            exit 1
+          fi
+          echo "✅ Integrity verified — hashes match." | tee -a "$LOGFILE"
+
+      - name: Run CAP validation
+        run: |
+          set -euo pipefail
+          python3 scripts/local_integrity_check.py
