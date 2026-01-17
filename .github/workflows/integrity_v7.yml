@@ -14,6 +14,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      LANG: "C.UTF-8"
+      LC_ALL: "C.UTF-8"
+      PYTHONUTF8: "1"
 
     steps:
       - name: Checkout repository
@@ -32,17 +36,34 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install jsonschema colorama requests
 
-      - name: Create log directory
-        run: mkdir -p archive/CAP_LOGS
+      - name: Ensure directories
+        run: mkdir -p archive/CAP_LOGS schemas scripts config
+
+      - name: Refresh canonical manifest and schema
+        run: |
+          set -euo pipefail
+          echo "🔍 Fetching canonical manifest and schema..."
+          curl -sSL https://raw.githubusercontent.com/falconforge-ai/falconforge-codex/main/falconforge-athena-v3_5/canonical/FalconForge_Integrity_Manifest_v3_5.json \
+            -o schemas/FalconForge_Integrity_Manifest_v3_5.json
+          curl -sSL https://raw.githubusercontent.com/falconforge-ai/falconforge-codex/main/falconforge-athena-v3_5/canonical/ATHENA_CAP_SCHEMA_v3_5.json \
+            -o schemas/ATHENA_CAP_SCHEMA_v3_5.json
 
       - name: Verify schema integrity
         run: |
           set -euo pipefail
           EXPECTED_HASH=$(jq -r '.modules[] | select(.name=="ATHENA_CAP_SCHEMA_v3_5.json") | .sha256' schemas/FalconForge_Integrity_Manifest_v3_5.json | sed 's/SHA256://')
+          if [ -z "$EXPECTED_HASH" ] || [ "$EXPECTED_HASH" = "null" ]; then
+            echo "❌ Failed to extract canonical hash from manifest."
+            exit 1
+          fi
           ACTUAL_HASH=$(sha256sum schemas/ATHENA_CAP_SCHEMA_v3_5.json | awk '{print $1}')
           LOGFILE="archive/CAP_LOGS/integrity_$(date +'%Y%m%d_%H%M%S').log"
-          echo "Expected: $EXPECTED_HASH" | tee -a "$LOGFILE"
-          echo "Actual:   $ACTUAL_HASH" | tee -a "$LOGFILE"
+
+          echo "🧾 Manifest version: $(jq -r .version schemas/FalconForge_Integrity_Manifest_v3_5.json)" | tee -a "$LOGFILE"
+          echo "🔑 Expected hash: $EXPECTED_HASH" | tee -a "$LOGFILE"
+          echo "🧩 Actual hash:   $ACTUAL_HASH" | tee -a "$LOGFILE"
+          echo "Workflow version: v7 | Run ID: $GITHUB_RUN_ID" | tee -a "$LOGFILE"
+
           if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
             echo "❌ Integrity mismatch detected!" | tee -a "$LOGFILE"
             exit 1
@@ -52,4 +73,20 @@ jobs:
       - name: Run CAP validation
         run: |
           set -euo pipefail
-          python3 scripts/local_integrity_check.py
+          echo "🧠 Running CAP validation via local_integrity_check.py"
+          python3 scripts/local_integrity_check.py | tee -a archive/CAP_LOGS/integrity_latest.log
+
+      - name: Prune old logs
+        run: |
+          set -euo pipefail
+          echo "🧹 Retaining last 10 validation logs..."
+          ls -t archive/CAP_LOGS/integrity_*.log | tail -n +11 | xargs -r rm --
+          echo "🪶 Log rotation complete."
+
+      - name: Final report
+        if: success()
+        run: echo "✅ Athena Integrity (v7) — All validations passed."
+
+      - name: Failure report
+        if: failure()
+        run: echo "❌ Athena Integrity (v7) — Validation failed. Check archive/CAP_LOGS/ for details."
