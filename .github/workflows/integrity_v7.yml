@@ -43,10 +43,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "🔍 Fetching canonical manifest and schema..."
-          curl -sSL https://raw.githubusercontent.com/falconforge-ai/falconforge-codex/main/falconforge-athena-v3_5/canonical/FalconForge_Integrity_Manifest_v3_5.json \
+          curl -sSL https://raw.githubusercontent.com/falconforgeai-rgb/falconforge-codex/main/falconforge-athena-v3_5/canonical/FalconForge_Integrity_Manifest_v3_5.json \
             -o schemas/FalconForge_Integrity_Manifest_v3_5.json
-          curl -sSL https://raw.githubusercontent.com/falconforge-ai/falconforge-codex/main/falconforge-athena-v3_5/canonical/ATHENA_CAP_SCHEMA_v3_5.json \
+          curl -sSL https://raw.githubusercontent.com/falconforgeai-rgb/falconforge-codex/main/falconforge-athena-v3_5/canonical/ATHENA_CAP_SCHEMA_v3_5.json \
             -o schemas/ATHENA_CAP_SCHEMA_v3_5.json
+
+          echo "✅ Canonical files fetched successfully."
+          head -n 2 schemas/FalconForge_Integrity_Manifest_v3_5.json || true
 
       - name: Verify schema integrity
         run: |
