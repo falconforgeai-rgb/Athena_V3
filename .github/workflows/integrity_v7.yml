@@ -1,12 +1,12 @@
-name: Verify Athena Integrity (v7)
+name: Verify Athena Integrity (v7 Final)
 
 on:
   workflow_dispatch:
     inputs:
       reason:
-        description: 'Manual audit trigger reason'
+        description: "Manual audit trigger reason"
         required: false
-        default: 'Manual audit dispatch'
+        default: "Manual audit dispatch"
   push:
     branches: [ main ]
 
@@ -20,15 +20,15 @@ jobs:
       PYTHONUTF8: "1"
 
     steps:
-      - name: Checkout repository
+      - name: 🧩 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
+      - name: 🧰 Install dependencies
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -36,29 +36,29 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install jsonschema colorama requests
 
-      - name: Ensure directories
+      - name: 📁 Ensure directory structure
         run: mkdir -p archive/CAP_LOGS schemas scripts config
 
-      - name: Refresh canonical manifest and schema
+      - name: 🔐 Fetch canonical manifest + schema (atomic)
         run: |
           set -euo pipefail
           echo "🔍 Fetching canonical manifest and schema..."
-          curl -sSL https://raw.githubusercontent.com/falconforgeai-rgb/falconforge-codex/main/falconforge-athena-v3_5/canonical/FalconForge_Integrity_Manifest_v3_5.json \
-            -o schemas/FalconForge_Integrity_Manifest_v3_5.json
-          curl -sSL https://raw.githubusercontent.com/falconforgeai-rgb/falconforge-codex/main/falconforge-athena-v3_5/canonical/ATHENA_CAP_SCHEMA_v3_5.json \
-            -o schemas/ATHENA_CAP_SCHEMA_v3_5.json
+          TMP_MANIFEST=$(mktemp)
+          TMP_SCHEMA=$(mktemp)
+          curl -fsSL https://raw.githubusercontent.com/falconforgeai-rgb/falconforge-codex/main/falconforge-athena-v3_5/canonical/FalconForge_Integrity_Manifest_v3_5.json -o "$TMP_MANIFEST"
+          curl -fsSL https://raw.githubusercontent.com/falconforgeai-rgb/falconforge-codex/main/falconforge-athena-v3_5/canonical/ATHENA_CAP_SCHEMA_v3_5.json -o "$TMP_SCHEMA"
+          mv "$TMP_MANIFEST" schemas/FalconForge_Integrity_Manifest_v3_5.json
+          mv "$TMP_SCHEMA" schemas/ATHENA_CAP_SCHEMA_v3_5.json
+          echo "✅ Canonical files fetched safely (atomic write)."
 
-          echo "✅ Canonical files fetched successfully."
-          head -n 2 schemas/FalconForge_Integrity_Manifest_v3_5.json || true
-
-      - name: Validate JSON format
+      - name: 🧾 Validate JSON format
         run: |
           set -euo pipefail
           jq empty schemas/FalconForge_Integrity_Manifest_v3_5.json
           jq empty schemas/ATHENA_CAP_SCHEMA_v3_5.json
           echo "✅ Both manifest and schema are valid JSON."
 
-      - name: Verify schema integrity
+      - name: 🔎 Verify schema integrity
         run: |
           set -euo pipefail
           EXPECTED_HASH=$(jq -r '.modules[] | select(.name=="ATHENA_CAP_SCHEMA_v3_5.json") | .sha256' schemas/FalconForge_Integrity_Manifest_v3_5.json | sed 's/SHA256://')
@@ -69,34 +69,50 @@ jobs:
           ACTUAL_HASH=$(sha256sum schemas/ATHENA_CAP_SCHEMA_v3_5.json | awk '{print $1}')
           LOGFILE="archive/CAP_LOGS/integrity_$(date +'%Y%m%d_%H%M%S').log"
 
-          echo "🧾 Manifest version: $(jq -r .version schemas/FalconForge_Integrity_Manifest_v3_5.json)" | tee -a "$LOGFILE"
-          echo "🔑 Expected hash: $EXPECTED_HASH" | tee -a "$LOGFILE"
-          echo "🧩 Actual hash:   $ACTUAL_HASH" | tee -a "$LOGFILE"
-          echo "Workflow version: v7 | Run ID: $GITHUB_RUN_ID" | tee -a "$LOGFILE"
+          {
+            echo "🧾 Manifest version: $(jq -r .version schemas/FalconForge_Integrity_Manifest_v3_5.json)"
+            echo "🔑 Expected hash: $EXPECTED_HASH"
+            echo "🧩 Actual hash:   $ACTUAL_HASH"
+            echo "Workflow version: v7 Final | Run ID: $GITHUB_RUN_ID"
+          } | tee -a "$LOGFILE"
 
           if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
             echo "❌ Integrity mismatch detected!" | tee -a "$LOGFILE"
+            echo "expected=$EXPECTED_HASH actual=$ACTUAL_HASH" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           echo "✅ Integrity verified — hashes match." | tee -a "$LOGFILE"
 
-      - name: Run CAP validation
+      - name: 🧠 Run CAP validation
         run: |
           set -euo pipefail
           echo "🧠 Running CAP validation via local_integrity_check.py"
           python3 scripts/local_integrity_check.py | tee -a archive/CAP_LOGS/integrity_latest.log
 
-      - name: Prune old logs
+      - name: 🧹 Prune old logs
         run: |
           set -euo pipefail
           echo "🧹 Retaining last 10 validation logs..."
           ls -t archive/CAP_LOGS/integrity_*.log | tail -n +11 | xargs -r rm --
           echo "🪶 Log rotation complete."
 
-      - name: Final report
+      - name: 🌐 Optional health probes
         if: success()
-        run: echo "✅ Athena Integrity (v7) — All validations passed."
+        continue-on-error: true
+        run: |
+          echo "🌐 Checking deployed service health..."
+          curl -fsSL https://athena-v3-ikg8.onrender.com/healthz | jq . || echo "⚠️ Health probe skipped."
+          curl -fsSL https://athena-v3-ikg8.onrender.com/metrics | jq . || true
 
-      - name: Failure report
+      - name: ✅ Final report
+        if: success()
+        run: |
+          echo "✅ Athena Integrity (v7 Final) — All validations passed."
+          echo "Integrity verified successfully on $(date -u)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ❌ Failure report
         if: failure()
-        run: echo "❌ Athena Integrity (v7) — Validation failed. Check archive/CAP_LOGS/ for details."
+        run: |
+          echo "❌ Athena Integrity (v7 Final) — Validation failed. Check archive/CAP_LOGS/ for details."
+          tail -n 40 archive/CAP_LOGS/integrity_*.log || true
+          echo "❌ Integrity failure logged $(date -u)." >> "$GITHUB_STEP_SUMMARY"
